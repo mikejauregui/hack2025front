@@ -73,14 +73,14 @@
   align-items: center;
 }
 
-.face-auth__video {
+.face-auth__detector {
   width: 100%;
-  aspect-ratio: 1 / 1;
-  max-width: 360px;
+  max-width: 420px;
+  min-height: 360px;
   border-radius: 12px;
   border: 2px solid rgba(79, 70, 229, 0.45);
-  object-fit: cover;
   background: #0b1728;
+  overflow: hidden;
 }
 
 .face-auth__actions {
@@ -107,6 +107,31 @@
 .face-auth__status {
   margin: 0;
   font-weight: 500;
+}
+
+.face-auth__fallback {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  width: 100%;
+  max-width: 420px;
+  padding: 1rem;
+  border-radius: 12px;
+  border: 1px solid #ffe8a3;
+  background: #fff9e6;
+  color: #8a6d1d;
+  text-align: left;
+}
+
+.face-auth__fallback button {
+  align-self: flex-start;
+  background: linear-gradient(135deg, #f97316, #fb923c);
+  border-radius: 12px;
+  color: #ffffff;
+  border: none;
+  padding: 0.65rem 1rem;
+  font-weight: 600;
+  cursor: pointer;
 }
 
 .field {

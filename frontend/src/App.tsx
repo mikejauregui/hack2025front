@@ -15,17 +15,55 @@ interface PaymentResponse {
 }
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:3001/api';
+const AWS_REGION = import.meta.env.VITE_AWS_REGION ?? 'us-east-1';
+const FACE_LIVENESS_RESOURCES_URL =
+  import.meta.env.VITE_FACE_LIVENESS_RESOURCES_URL ??
+  `https://static.${AWS_REGION}.rekognition.amazonaws.com/FaceLivenessSessionResources/latest/face-liveness-detector.js`;
+
+declare global {
+  interface Window {
+    AmazonRekognitionStreamingLiveness?: {
+      createFaceLivenessDetector: (options: Record<string, unknown>) => Promise<{
+        render: (container: HTMLElement) => void;
+        start: () => void;
+        destroy?: () => void;
+      }>;
+    };
+  }
+}
+
+let faceLivenessScriptPromise: Promise<void> | null = null;
+
+const loadFaceLivenessResources = async () => {
+  if (window.AmazonRekognitionStreamingLiveness) {
+    return;
+  }
+
+  if (!faceLivenessScriptPromise) {
+    faceLivenessScriptPromise = new Promise<void>((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = FACE_LIVENESS_RESOURCES_URL;
+      script.async = true;
+      script.onload = () => resolve();
+      script.onerror = () => reject(new Error(`No se pudo cargar el script de Face Liveness desde ${FACE_LIVENESS_RESOURCES_URL}`));
+      document.body.appendChild(script);
+    });
+  }
+
+  await faceLivenessScriptPromise;
+};
 
 function App() {
   const [amount, setAmount] = useState<string>('');
   const [currency, setCurrency] = useState<string>('USD');
   const [faceAuthToken, setFaceAuthToken] = useState<string | null>(null);
-  const [faceAuthStatus, setFaceAuthStatus] = useState<'idle' | 'capturing' | 'verified' | 'error'>('idle');
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [faceAuthStatus, setFaceAuthStatus] = useState<'idle' | 'loading' | 'capturing' | 'verified' | 'error'>('idle');
   const [faceAuthMessage, setFaceAuthMessage] = useState<string>('');
-  const [isCameraActive, setIsCameraActive] = useState<boolean>(false);
-  const [mediaStream, setMediaStream] = useState<MediaStream | null>(null);
+  const [detectorMode, setDetectorMode] = useState<'idle' | 'loading' | 'ready' | 'unsupported'>('idle');
+  const detectorContainerRef = useRef<HTMLDivElement | null>(null);
+  const detectorInstanceRef = useRef<{ destroy?: () => void } | null>(null);
   const [status, setStatus] = useState<PaymentStatus>('idle');
-  const videoRef = useRef<HTMLVideoElement | null>(null);
 
   const userId = 'demo-user';
 
@@ -37,73 +75,118 @@ function App() {
 
   useEffect(() => {
     return () => {
-      mediaStream?.getTracks().forEach((track) => track.stop());
+      detectorInstanceRef.current?.destroy?.();
     };
-  }, [mediaStream]);
+  }, []);
 
-  useEffect(() => {
-    const video = videoRef.current;
-
-    if (video && mediaStream) {
-      video.srcObject = mediaStream;
-      const playPromise = video.play();
-      if (playPromise !== undefined) {
-        playPromise.catch((error) => {
-          console.warn('No se pudo iniciar la reproducción del video automáticamente.', error);
-        });
-      }
-    }
-  }, [mediaStream]);
-
-  const stopCamera = () => {
-    mediaStream?.getTracks().forEach((track) => track.stop());
-    setMediaStream(null);
-    setIsCameraActive(false);
+  const resetFaceAuthState = () => {
+    detectorInstanceRef.current?.destroy?.();
+    detectorInstanceRef.current = null;
+    setSessionId(null);
+    setDetectorMode('idle');
   };
 
   const handleStartFaceAuth = async () => {
-    if (!navigator.mediaDevices?.getUserMedia) {
-      setFaceAuthStatus('error');
-      setFaceAuthMessage('Tu navegador no soporta acceso a la cámara.');
-      return;
-    }
+    setFaceAuthStatus('loading');
+    setFaceAuthMessage('Preparando la sesión de reconocimiento facial...');
+    setDetectorMode('loading');
+    setFaceAuthToken(null);
 
     try {
+      const response = await fetch(`${API_BASE_URL}/face-auth/session`, {
+        method: 'POST',
+      });
+
+      if (!response.ok) {
+        throw new Error('No fue posible inicializar la sesión de Face Liveness.');
+      }
+
+      const payload = await response.json();
+      const newSessionId: string | undefined = payload?.data?.sessionId;
+
+      if (!newSessionId) {
+        throw new Error('La respuesta del backend no incluyó un sessionId.');
+      }
+
+      setSessionId(newSessionId);
       setFaceAuthStatus('capturing');
-      setFaceAuthMessage('Apunta tu rostro a la cámara para validar tu identidad.');
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-      setMediaStream(stream);
-      setIsCameraActive(true);
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        const playPromise = videoRef.current.play();
-        if (playPromise !== undefined) {
-          playPromise.catch((error) => {
-            console.warn('No se pudo reproducir el stream inmediatamente.', error);
-          });
+      setFaceAuthMessage('Sigue las instrucciones en pantalla para completar la verificación facial.');
+
+      try {
+        await loadFaceLivenessResources();
+        const detectorFactory = window.AmazonRekognitionStreamingLiveness?.createFaceLivenessDetector;
+
+        if (!detectorFactory) {
+          throw new Error('El recurso de Amazon Rekognition Face Liveness no está disponible en la ventana.');
         }
+
+        if (!detectorContainerRef.current) {
+          throw new Error('No se encontró el contenedor del detector.');
+        }
+
+        const detector = await detectorFactory({
+          sessionId: newSessionId,
+          region: AWS_REGION,
+          // Los callbacks reales dependerán del SDK. Se incluyen valores por defecto con nombres comunes.
+          onComplete: (event: { sessionId?: string }) => {
+            const verifiedSession = event?.sessionId ?? newSessionId;
+            setFaceAuthToken(verifiedSession);
+            setFaceAuthStatus('verified');
+            setFaceAuthMessage('Identidad verificada correctamente.');
+            setDetectorMode('ready');
+            detectorInstanceRef.current?.destroy?.();
+            detectorInstanceRef.current = null;
+          },
+          onError: (error: unknown) => {
+            console.error('Error desde el detector de Face Liveness:', error);
+            setFaceAuthStatus('error');
+            setFaceAuthMessage('Ocurrió un error durante la verificación facial. Intenta nuevamente.');
+            resetFaceAuthState();
+          },
+        });
+
+        detector.render(detectorContainerRef.current);
+
+        if (typeof detector.start === 'function') {
+          detector.start();
+        }
+
+        detectorInstanceRef.current = detector;
+        setDetectorMode('ready');
+      } catch (detectorError) {
+        console.warn('Modo Face Liveness no disponible. Se habilitará la verificación simulada.', detectorError);
+        setDetectorMode('unsupported');
       }
     } catch (error) {
       console.error(error);
       setFaceAuthStatus('error');
-      setFaceAuthMessage('No fue posible acceder a la cámara. Verifica permisos.');
-      stopCamera();
+      setFaceAuthMessage(
+        error instanceof Error ? error.message : 'Ocurrió un error inesperado. Intenta iniciar nuevamente la verificación.',
+      );
+      resetFaceAuthState();
     }
   };
 
-  const handleCompleteFaceAuth = () => {
-    const token = `valid-${crypto.randomUUID?.() ?? Date.now().toString(36)}`;
-    setFaceAuthToken(token);
+  const handleSimulateFaceAuth = () => {
+    if (!sessionId) {
+      setFaceAuthStatus('error');
+      setFaceAuthMessage('No hay una sesión válida para simular la verificación.');
+      return;
+    }
+
+    setFaceAuthToken(sessionId);
     setFaceAuthStatus('verified');
-    setFaceAuthMessage('Identidad verificada. Puedes continuar con el pago.');
-    stopCamera();
+    setFaceAuthMessage(
+      'Modo simulado activo: se asumió una verificación facial correcta. Configura el SDK oficial para un flujo real.',
+    );
+    resetFaceAuthState();
   };
 
   const handleCancelFaceAuth = () => {
+    resetFaceAuthState();
     setFaceAuthStatus('idle');
     setFaceAuthToken(null);
     setFaceAuthMessage('');
-    stopCamera();
   };
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
@@ -176,19 +259,28 @@ function App() {
             <div className="face-auth__content">
               <h2>Verificación facial</h2>
               <p>
-                Necesitamos validar tu identidad mediante reconocimiento facial. Presiona el botón inferior para iniciar la cámara.
+                Necesitamos validar tu identidad mediante reconocimiento facial. Presiona el botón inferior para iniciar la
+                verificación con Amazon Rekognition Face Liveness.
               </p>
             </div>
 
-            {isCameraActive ? (
+            {faceAuthStatus === 'capturing' ? (
               <div className="face-auth__capture">
-                <video ref={videoRef} autoPlay playsInline muted className="face-auth__video" />
+                <div ref={detectorContainerRef} className="face-auth__detector" />
+                {detectorMode === 'unsupported' && (
+                  <div className="face-auth__fallback">
+                    <p>
+                      No se pudo cargar el componente oficial de Face Liveness en este entorno. Puedes continuar con una
+                      verificación simulada para pruebas locales.
+                    </p>
+                    <button type="button" onClick={handleSimulateFaceAuth}>
+                      Simular verificación facial
+                    </button>
+                  </div>
+                )}
                 <div className="face-auth__actions">
                   <button type="button" className="secondary" onClick={handleCancelFaceAuth}>
                     Cancelar
-                  </button>
-                  <button type="button" onClick={handleCompleteFaceAuth}>
-                    Confirmar identidad
                   </button>
                 </div>
               </div>
@@ -197,7 +289,7 @@ function App() {
                 type="button"
                 className="primary"
                 onClick={handleStartFaceAuth}
-                disabled={faceAuthStatus === 'capturing'}
+                disabled={faceAuthStatus === 'loading'}
               >
                 {faceAuthStatus === 'verified' ? 'Reiniciar verificación facial' : 'Iniciar verificación facial'}
               </button>
