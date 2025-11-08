@@ -20,6 +20,7 @@ backend/.env
 
 # Cache y temporales
 .npm/
+.npm-cache/
 .pnpm-store/
 .turbo/
 .parcel-cache/
