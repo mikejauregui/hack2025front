@@ -377,7 +377,7 @@ function App() {
         formEntries: Array.from(formData.keys()),
       });
 
-      const response = await fetch('https://uploaded-thousands-input-toe.trycloudflare.com/api/upload', {
+      const response = await fetch('https://squad-eos-therefore-musical.trycloudflare.com/api/upload', {
         method: 'POST',
         mode: 'cors',
         body: formData,
@@ -448,7 +448,7 @@ function App() {
     setTransactionsStatus('processing');
     setTransactionsError('');
     try {
-      const response = await fetch('https://uploaded-thousands-input-toe.trycloudflare.com/api/transactions', {
+      const response = await fetch('https://squad-eos-therefore-musical.trycloudflare.com/api/transactions', {
         method: 'GET',
         mode: 'cors',
         headers: {
