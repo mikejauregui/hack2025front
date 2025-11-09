@@ -28,10 +28,10 @@
 
 .app__main {
   width: 100%;
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 2.5rem;
-  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
-  justify-items: stretch;
+  align-items: center;
 }
 
 .payment-form {
@@ -43,6 +43,7 @@
   background: #ffffff;
   box-shadow: 0 12px 32px rgba(15, 23, 42, 0.08);
   width: 100%;
+  max-width: 960px;
 }
 
 .face-auth {
@@ -109,6 +110,193 @@
   font-weight: 500;
 }
 
+.face-auth__transcript {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-top: 0.75rem;
+  padding: 0.75rem 1rem;
+  border: 1px dashed rgba(79, 70, 229, 0.45);
+  border-radius: 12px;
+  background: rgba(129, 140, 248, 0.12);
+}
+
+.face-auth__transcript-label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #312e81;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.face-auth__transcript-text {
+  margin: 0;
+  font-size: 1rem;
+  color: #1f2933;
+}
+
+.face-auth__transcript-badge {
+  align-self: flex-start;
+  padding: 0.25rem 0.65rem;
+  border-radius: 9999px;
+  background: rgba(59, 130, 246, 0.15);
+  color: #1d4ed8;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.transactions {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  padding: 2rem;
+  border-radius: 16px;
+  background: #ffffff;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.08);
+  width: 100%;
+  max-width: 960px;
+}
+
+.transactions__header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.transactions__header-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.transactions__header-actions p {
+  margin: 0;
+  color: #52606d;
+}
+
+.transactions__header h2 {
+  margin: 0 0 0.35rem;
+  font-size: 1.5rem;
+  color: #1f2933;
+}
+
+.transactions__header p {
+  margin: 0;
+  color: #52606d;
+}
+
+.transactions__error {
+  margin: 0;
+  padding: 0.75rem 1rem;
+  border-radius: 12px;
+  background: rgba(239, 68, 68, 0.12);
+  color: #b91c1c;
+  font-weight: 600;
+}
+
+.transactions__placeholder {
+  padding: 1.25rem;
+  border-radius: 12px;
+  border: 1px dashed rgba(99, 102, 241, 0.3);
+  background: rgba(129, 140, 248, 0.1);
+  color: #3730a3;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.transactions__refresh {
+  align-self: flex-start;
+  border: none;
+  background: rgba(79, 70, 229, 0.15);
+  color: #4338ca;
+  border-radius: 12px;
+  padding: 0.55rem 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s ease, transform 0.2s ease;
+}
+
+.transactions__refresh:hover {
+  background: rgba(79, 70, 229, 0.25);
+  transform: translateY(-1px);
+}
+
+.transactions__refresh:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.transactions__loading {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  color: #4338ca;
+  font-weight: 600;
+}
+
+.transactions__spinner {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 3px solid rgba(79, 70, 229, 0.3);
+  border-top-color: #4f46e5;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.transactions__table-wrapper {
+  overflow-x: auto;
+}
+
+.transactions__table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 680px;
+}
+
+.transactions__table th,
+.transactions__table td {
+  text-align: left;
+  padding: 0.75rem 0.9rem;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.25);
+}
+
+.transactions__table thead {
+  background: rgba(99, 102, 241, 0.12);
+  color: #312e81;
+}
+
+.transactions__table tbody tr:hover {
+  background: rgba(79, 70, 229, 0.05);
+}
+
+.transactions__id,
+.transactions__snapshot {
+  font-family: 'Fira Code', 'Courier New', Courier, monospace;
+  font-size: 0.85rem;
+  word-break: break-all;
+}
+
+.transactions__transcript {
+  max-width: 260px;
+  word-break: break-word;
+  color: #1f2933;
+}
+
+.transactions__transcript-empty {
+  color: #94a3b8;
+  font-style: italic;
+}
+
 .field {
   display: flex;
   flex-direction: column;
@@ -164,6 +352,39 @@
   box-shadow: 0 10px 24px rgba(99, 102, 241, 0.35);
 }
 
+.tabs {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0 0 1.75rem;
+  padding: 0;
+}
+
+.tabs__button {
+  border: 1px solid rgba(99, 102, 241, 0.35);
+  background: rgba(99, 102, 241, 0.12);
+  padding: 0.55rem 1.15rem;
+  border-radius: 9999px;
+  font-weight: 600;
+  color: #4338ca;
+  cursor: pointer;
+  transition: background 0.2s ease, color 0.2s ease, transform 0.2s ease;
+}
+
+.tabs__button.is-active {
+  background: #4338ca;
+  color: #ffffff;
+  border-color: #4338ca;
+  box-shadow: 0 6px 16px rgba(79, 70, 229, 0.25);
+}
+
+.tabs__button:not(.is-active):hover {
+  background: rgba(99, 102, 241, 0.25);
+  transform: translateY(-1px);
+}
+
 @media (max-width: 600px) {
   .app {
     padding: 2.5rem 1rem;
@@ -173,5 +394,64 @@
   .payment-feedback {
     padding: 1.5rem;
   }
+}
+
+.dialog-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 23, 42, 0.45);
+  backdrop-filter: blur(2px);
+  z-index: 10;
+  padding: 1.5rem;
+}
+
+.dialog {
+  width: 100%;
+  max-width: 420px;
+  border-radius: 16px;
+  padding: 1.75rem;
+  box-shadow: 0 24px 52px rgba(15, 23, 42, 0.25);
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  background: #ffffff;
+}
+
+.dialog h3 {
+  margin: 0;
+  font-size: 1.35rem;
+}
+
+.dialog p {
+  margin: 0;
+  color: #475569;
+}
+
+.dialog button {
+  align-self: flex-end;
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  color: #ffffff;
+  border: none;
+  border-radius: 9999px;
+  padding: 0.6rem 1.4rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.2s ease;
+}
+
+.dialog button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 12px 24px rgba(99, 102, 241, 0.35);
+}
+
+.dialog--success {
+  border: 2px solid rgba(34, 197, 94, 0.35);
+}
+
+.dialog--error {
+  border: 2px solid rgba(239, 68, 68, 0.3);
 }
 

@@ -27,28 +27,51 @@ export class OpenPaymentsService {
   }
 
   async createPaymentIntent(params: CreatePaymentIntentParams): Promise<OpenPaymentsIntentResponse> {
-    // Nota: Este método asume la existencia de un endpoint de OpenPayments que permite crear intents.
-    // Cuando se tenga la documentación oficial, actualizar la URL y payload según corresponda.
-    const url = `${this.baseUrl}/payments/intents`;
-
-    const response = await axios.post<OpenPaymentsIntentResponse>(
-      url,
-      {
+    if (!this.baseUrl || !this.apiKey) {
+      return {
+        intentId: `mock-intent-${Date.now()}`,
+        status: 'pending',
+        approvalUrl: undefined,
         amount: params.amount,
         currency: params.currency,
-        metadata: {
-          userId: params.userId,
-        },
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${this.apiKey}`,
-          'Content-Type': 'application/json',
-        },
-      },
-    );
+        userId: params.userId,
+        simulated: true,
+        message: 'OpenPayments no configurado. Respuesta simulada.',
+      } as OpenPaymentsIntentResponse;
+    }
 
-    return response.data;
+    const url = `${this.baseUrl}/payments/intents`;
+
+    try {
+      const response = await axios.post<OpenPaymentsIntentResponse>(
+        url,
+        {
+          amount: params.amount,
+          currency: params.currency,
+          metadata: {
+            userId: params.userId,
+          },
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${this.apiKey}`,
+            'Content-Type': 'application/json',
+          },
+        },
+      );
+
+      return response.data;
+    } catch (error) {
+      if (axios.isAxiosError(error) && error.code === 'ENOTFOUND') {
+        throw new Error('No se pudo resolver el host de OpenPayments. Configura OPENPAYMENTS_BASE_URL correctamente.');
+      }
+
+      if (error instanceof Error) {
+        throw new Error(`Error al invocar OpenPayments: ${error.message}`);
+      }
+
+      throw new Error('Error desconocido al comunicarse con OpenPayments.');
+    }
   }
 }
 

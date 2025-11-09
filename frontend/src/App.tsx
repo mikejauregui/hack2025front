@@ -1,56 +1,131 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { FormEvent } from 'react';
 
 import './App.css';
 
-type PaymentStatus = 'idle' | 'processing' | 'success' | 'error';
+type SpeechRecognitionInstance = {
+  lang: string;
+  continuous: boolean;
+  interimResults: boolean;
+  maxAlternatives: number;
+  start: () => void;
+  stop: () => void;
+  abort: () => void;
+  onerror: ((event: unknown) => void) | null;
+  onresult: ((event: SpeechRecognitionResultEvent) => void) | null;
+  onend: (() => void) | null;
+  onstart: (() => void) | null;
+};
 
-interface PaymentResponse {
-  message: string;
-  data?: {
-    intentId?: string;
-    status?: string;
-    approvalUrl?: string;
-  };
+type SpeechRecognitionConstructor = new () => SpeechRecognitionInstance;
+
+interface SpeechRecognitionAlternative {
+  transcript: string;
+  confidence: number;
 }
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:3001/api';
+interface SpeechRecognitionResult {
+  0: SpeechRecognitionAlternative;
+  length: number;
+  isFinal: boolean;
+}
+
+interface SpeechRecognitionResultList {
+  length: number;
+  item: (index: number) => SpeechRecognitionResult;
+  [index: number]: SpeechRecognitionResult;
+}
+
+interface SpeechRecognitionResultEvent extends Event {
+  resultIndex: number;
+  results: SpeechRecognitionResultList;
+}
+
+declare global {
+  interface Window {
+    webkitSpeechRecognition?: SpeechRecognitionConstructor;
+    SpeechRecognition?: SpeechRecognitionConstructor;
+  }
+}
+
+type PaymentStatus = 'idle' | 'processing' | 'success' | 'error';
+
+interface Transaction {
+  id: string;
+  amount: number;
+  currency: string;
+  store: number;
+  timestamp: string;
+  snapshot: string;
+  transcript: string | null;
+}
 
 function App() {
   const [amount, setAmount] = useState<string>('');
   const [currency, setCurrency] = useState<string>('USD');
-  const [faceAuthToken, setFaceAuthToken] = useState<string | null>(null);
   const [faceAuthStatus, setFaceAuthStatus] = useState<'idle' | 'capturing' | 'verified' | 'error'>('idle');
   const [faceAuthMessage, setFaceAuthMessage] = useState<string>('');
   const [isCameraActive, setIsCameraActive] = useState<boolean>(false);
   const [mediaStream, setMediaStream] = useState<MediaStream | null>(null);
-  const [status, setStatus] = useState<PaymentStatus>('idle');
+  const [isRecording, setIsRecording] = useState<boolean>(false);
+  const [isRecognitionActive, setIsRecognitionActive] = useState<boolean>(false);
+  const [speechTranscript, setSpeechTranscript] = useState<string>('');
+  const [speechInterim, setSpeechInterim] = useState<string>('');
+  const [transactionsStatus, setTransactionsStatus] = useState<PaymentStatus>('idle');
+  const [activeTab, setActiveTab] = useState<'verification' | 'transactions'>('verification');
+  const [paymentDialog, setPaymentDialog] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const captureTimeoutRef = useRef<number | null>(null);
-
-  const userId = 'demo-user';
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioStreamRef = useRef<MediaStream | null>(null);
+  const audioChunksRef = useRef<BlobPart[]>([]);
+  const audioMimeTypeRef = useRef<string>('audio/webm');
+  const speechRecognitionRef = useRef<SpeechRecognitionInstance | null>(null);
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [transactionsError, setTransactionsError] = useState<string>('');
 
   const amountValue = useMemo(() => Number.parseFloat(amount), [amount]);
+  const isLoadingTransactions = transactionsStatus === 'processing';
 
-  const isSubmitDisabled = useMemo(() => {
-    return Number.isNaN(amountValue) || amountValue <= 0 || !currency || !faceAuthToken || status === 'processing';
-  }, [amountValue, currency, faceAuthToken, status]);
+  const stopAllStreams = () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+    }
+    stopSpeechRecognition();
+    audioStreamRef.current?.getTracks().forEach((track, index) => {
+      console.log('[FaceAuth] Deteniendo track de audio interno', { index, kind: track.kind, readyState: track.readyState });
+      track.stop();
+    });
+    audioStreamRef.current = null;
+    mediaStream?.getTracks().forEach((track, index) => {
+      // eslint-disable-next-line no-console
+      console.log('[FaceAuth] Deteniendo track', { index, kind: track.kind, readyState: track.readyState });
+      track.stop();
+    });
+    setMediaStream(null);
+    setIsCameraActive(false);
+    setIsRecording(false);
+    mediaRecorderRef.current = null;
+  };
+
+  const stopSpeechRecognition = () => {
+    if (speechRecognitionRef.current) {
+      try {
+        speechRecognitionRef.current.stop();
+      } catch (error) {
+        console.warn('[FaceAuth] Error al detener SpeechRecognition', error);
+      }
+      speechRecognitionRef.current = null;
+    }
+    setIsRecognitionActive(false);
+    setSpeechInterim('');
+  };
 
   useEffect(() => {
     return () => {
-      mediaStream?.getTracks().forEach((track, index) => {
-        // eslint-disable-next-line no-console
-        console.log('[FaceAuth] Deteniendo track en cleanup', { index, kind: track.kind, readyState: track.readyState });
-        track.stop();
-      });
-      if (captureTimeoutRef.current !== null) {
-        window.clearTimeout(captureTimeoutRef.current);
-        captureTimeoutRef.current = null;
-      }
+      stopAllStreams();
       // eslint-disable-next-line no-console
       console.log('[FaceAuth] Componente desmontado: recursos liberados');
     };
-  }, [mediaStream]);
+  }, []);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -66,264 +141,335 @@ function App() {
     }
   }, [mediaStream]);
 
-  const stopCamera = () => {
-    // eslint-disable-next-line no-console
-    console.log('[FaceAuth] stopCamera invocado');
-    if (captureTimeoutRef.current !== null) {
-      window.clearTimeout(captureTimeoutRef.current);
-      captureTimeoutRef.current = null;
-    }
-    mediaStream?.getTracks().forEach((track) => track.stop());
-    setMediaStream(null);
-    setIsCameraActive(false);
-  };
-
   const handleStartFaceAuth = async () => {
-    // eslint-disable-next-line no-console
     console.log('[FaceAuth] Iniciando verificación facial');
     if (!navigator.mediaDevices?.getUserMedia) {
       setFaceAuthStatus('error');
-      setFaceAuthMessage('Tu navegador no soporta acceso a la cámara.');
-      // eslint-disable-next-line no-console
+      setFaceAuthMessage('Tu navegador no soporta acceso a la cámara y micrófono.');
       console.error('[FaceAuth] getUserMedia no disponible');
       return;
     }
 
+    if (typeof MediaRecorder === 'undefined') {
+      const message =
+        'Tu navegador no soporta la grabación de audio necesaria para la validación por voz. Prueba con Chrome o Edge.';
+      console.error('[FaceAuth] MediaRecorder no disponible');
+      setFaceAuthStatus('error');
+      setFaceAuthMessage(message);
+      return;
+    }
+
+    const SpeechRecognitionCtor =
+      (window.SpeechRecognition || window.webkitSpeechRecognition) as SpeechRecognitionConstructor | undefined;
+
+    if (!SpeechRecognitionCtor) {
+      const message =
+        'Tu navegador no soporta reconocimiento de voz. Usa Chrome o Edge actualizado para completar la validación.';
+      console.error('[FaceAuth] SpeechRecognition no disponible');
+      setFaceAuthStatus('error');
+      setFaceAuthMessage(message);
+      return;
+    }
+
+    setPaymentDialog(null);
+
     try {
-      setFaceAuthStatus('capturing');
-      setFaceAuthMessage('Apunta tu rostro a la cámara. Capturaremos una foto automáticamente en 3 segundos.');
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-      // eslint-disable-next-line no-console
-      console.log('[FaceAuth] Stream de cámara obtenido');
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      console.log('[FaceAuth] Stream de cámara y audio obtenido');
       setMediaStream(stream);
       setIsCameraActive(true);
-      // Esperar al siguiente frame para que el video se monte y el ref exista.
-      await new Promise<void>((resolve) => {
-        requestAnimationFrame(() => resolve());
-      });
+      setFaceAuthStatus('capturing');
+      const expectedSpeech = `Acepto el cargo por $${Number.isNaN(amountValue) ? 'XX.XX' : amountValue.toFixed(2)} ${currency}`;
+      setFaceAuthMessage(`Apunta tu rostro a la cámara y di: "${expectedSpeech}". Cuando termines, pulsa "Detener y validar".`);
 
-      if (!videoRef.current) {
-        // eslint-disable-next-line no-console
-        console.warn('[FaceAuth] videoRef aún no está disponible tras el primer frame. Esperando...', {
-          timestamp: Date.now(),
-        });
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 100);
-        });
+      stopSpeechRecognition();
+      setSpeechTranscript('');
+      setSpeechInterim('');
+
+      const recognition = new SpeechRecognitionCtor();
+      recognition.lang = 'es-MX';
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.maxAlternatives = 1;
+
+      recognition.onstart = () => {
+        console.log('[FaceAuth] Reconocimiento de voz iniciado');
+        setIsRecognitionActive(true);
+      };
+
+      recognition.onerror = (event) => {
+        console.error('[FaceAuth] Error en SpeechRecognition', event);
+      };
+
+      recognition.onresult = (event) => {
+        let interimText = '';
+        for (let i = event.resultIndex; i < event.results.length; i += 1) {
+          const result = event.results[i];
+          const alternative = result[0];
+          const transcript = alternative?.transcript?.trim() ?? '';
+          if (!transcript) {
+            continue;
+          }
+
+          if (result.isFinal) {
+            setSpeechTranscript((prev) => `${prev} ${transcript}`.trim());
+          } else {
+            interimText += `${transcript} `;
+          }
+        }
+        setSpeechInterim(interimText.trim());
+      };
+
+      recognition.onend = () => {
+        console.log('[FaceAuth] Reconocimiento de voz finalizado');
+        setIsRecognitionActive(false);
+        setSpeechInterim('');
+      };
+
+      speechRecognitionRef.current = recognition;
+      try {
+        recognition.start();
+      } catch (error) {
+        console.warn('[FaceAuth] No se pudo iniciar SpeechRecognition', error);
       }
 
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        const playPromise = videoRef.current.play();
-        if (playPromise !== undefined) {
-          playPromise.catch((error) => {
-            console.warn('No se pudo reproducir el stream inmediatamente.', error);
-          });
-        }
+      const audioTracks = stream.getAudioTracks();
+      if (audioTracks.length === 0) {
+        throw new Error('No se detectó micrófono. Revisa los permisos de audio.');
+      }
 
-        const scheduleCapture = () => {
-          // eslint-disable-next-line no-console
-          console.log('[FaceAuth] Programando captura en 3 segundos', {
-            timestamp: Date.now(),
-          });
-          if (captureTimeoutRef.current !== null) {
-            window.clearTimeout(captureTimeoutRef.current);
-          }
-          captureTimeoutRef.current = window.setTimeout(() => {
-            captureAndSendFrame().catch((error) => {
-              console.error('Error al capturar la imagen:', error);
-            });
-          }, 3000);
-        };
+      audioChunksRef.current = [];
 
-        if (videoRef.current.readyState >= 2) {
-          // eslint-disable-next-line no-console
-          console.log('[FaceAuth] Video listo (readyState >= 2), iniciando temporizador', {
-            readyState: videoRef.current.readyState,
-            videoWidth: videoRef.current.videoWidth,
-            videoHeight: videoRef.current.videoHeight,
-            currentSrc: videoRef.current.currentSrc,
-          });
-          scheduleCapture();
-        } else {
-          const onLoadedMetadata = () => {
-            videoRef.current?.removeEventListener('loadedmetadata', onLoadedMetadata);
-            // eslint-disable-next-line no-console
-            console.log('[FaceAuth] Evento loadedmetadata recibido, iniciando temporizador', {
-              readyState: videoRef.current?.readyState,
-              videoWidth: videoRef.current?.videoWidth,
-              videoHeight: videoRef.current?.videoHeight,
-              currentSrc: videoRef.current?.currentSrc,
-            });
-            scheduleCapture();
-          };
-          videoRef.current.addEventListener('loadedmetadata', onLoadedMetadata, { once: true });
-          // Fallback: si loadedmetadata no llega, capturar igual tras 4 s.
-          window.setTimeout(() => {
-            if (faceAuthStatus === 'capturing' && captureTimeoutRef.current === null) {
-              // eslint-disable-next-line no-console
-              console.warn('[FaceAuth] Evento loadedmetadata no recibido, forzando programación de captura');
-              scheduleCapture();
-            }
-          }, 4000);
+      const audioStream = new MediaStream();
+      audioTracks.forEach((track: MediaStreamTrack) => {
+        audioStream.addTrack(track.clone ? track.clone() : track);
+      });
+      audioStreamRef.current = audioStream;
+
+      const candidateMimeTypes = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/ogg', ''];
+
+      let recorder: MediaRecorder | null = null;
+      for (const mimeType of candidateMimeTypes) {
+        if (mimeType && !MediaRecorder.isTypeSupported(mimeType)) {
+          continue;
         }
-      } else {
+        try {
+          recorder = mimeType ? new MediaRecorder(audioStream, { mimeType }) : new MediaRecorder(audioStream);
+          console.log('[FaceAuth] MediaRecorder inicializado con mimeType', mimeType || 'por defecto');
+          break;
+        } catch (error) {
+          console.warn('[FaceAuth] No se pudo usar mimeType', mimeType || 'default', error);
+          recorder = null;
+        }
+      }
+
+      if (!recorder) {
+        throw new Error('No fue posible iniciar la grabación de audio en este navegador.');
+      }
+
+      audioMimeTypeRef.current = recorder.mimeType || audioMimeTypeRef.current;
+
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+      recorder.onstart = () => {
         // eslint-disable-next-line no-console
-        console.error('[FaceAuth] videoRef.current es null al configurar el stream');
+        console.log('[FaceAuth] Grabación iniciada');
+        setIsRecording(true);
+      };
+      recorder.onstop = () => {
+        // eslint-disable-next-line no-console
+        console.log('[FaceAuth] Grabación detenida', { chunks: audioChunksRef.current.length });
+      };
+      recorder.onerror = (event) => {
+        console.error('[FaceAuth] Error en MediaRecorder', event);
+        setFaceAuthStatus('error');
+        setFaceAuthMessage('Hubo un problema al grabar el audio. Intenta nuevamente.');
+      };
+
+      mediaRecorderRef.current = recorder;
+      try {
+        mediaRecorderRef.current.start();
+      } catch (error) {
+        throw new Error(
+          error instanceof Error
+            ? `No se pudo iniciar la grabación de audio: ${error.message}`
+            : 'No se pudo iniciar la grabación de audio.',
+        );
       }
     } catch (error) {
-      console.error(error);
+      console.error('[FaceAuth] Error al iniciar la cámara o micrófono', error);
       setFaceAuthStatus('error');
-      setFaceAuthMessage('No fue posible acceder a la cámara. Verifica permisos.');
-      stopCamera();
+      setFaceAuthMessage(
+        error instanceof Error ? `Error al iniciar la cámara o micrófono: ${error.message}` : 'Ocurrió un error inesperado.',
+      );
     }
   };
 
-  const captureAndSendFrame = async () => {
+  const captureAndSendEvidence = async () => {
     if (!videoRef.current) {
       setFaceAuthStatus('error');
-      setFaceAuthMessage('No se pudo acceder al video para capturar la imagen.');
-      stopCamera();
+      setFaceAuthMessage('No se encontró el video para capturar la imagen.');
+      stopAllStreams();
       return;
     }
 
     const video = videoRef.current;
 
     try {
-      // eslint-disable-next-line no-console
-      console.log('[FaceAuth] Ejecutando captura automática', {
-        readyState: video.readyState,
-        videoWidth: video.videoWidth,
-        videoHeight: video.videoHeight,
-        paused: video.paused,
-        ended: video.ended,
-        hasSrcObject: Boolean(video.srcObject),
-        timestamp: Date.now(),
-      });
-      setFaceAuthMessage('Capturando imagen...');
+      setFaceAuthMessage('Procesando captura...');
+
       const canvas = document.createElement('canvas');
       const sourceWidth = video.videoWidth || 640;
       const sourceHeight = video.videoHeight || 480;
       const targetWidth = 320;
       const targetHeight = Math.round((sourceHeight / sourceWidth) * targetWidth) || 240;
-      const width = targetWidth;
-      const height = targetHeight;
-      canvas.width = width;
-      canvas.height = height;
+      canvas.width = targetWidth;
+      canvas.height = targetHeight;
       const context = canvas.getContext('2d');
 
       if (!context) {
-        throw new Error('No se pudo crear el contexto de dibujo.');
+        throw new Error('No se pudo preparar el contexto del lienzo.');
       }
 
-      context.drawImage(video, 0, 0, sourceWidth, sourceHeight, 0, 0, width, height);
+      context.drawImage(video, 0, 0, sourceWidth, sourceHeight, 0, 0, targetWidth, targetHeight);
 
-      const blob = await new Promise<Blob>((resolve, reject) => {
+      const snapshotBlob = await new Promise<Blob>((resolve, reject) => {
         canvas.toBlob((result) => {
           if (result) {
             resolve(result);
           } else {
-            reject(new Error('No se pudo generar la imagen capturada.'));
+            reject(new Error('No se pudo obtener la imagen capturada.'));
           }
         }, 'image/png');
       });
 
-      // eslint-disable-next-line no-console
-      console.log('[FaceAuth] Imagen capturada', {
-        width,
-        height,
-        size: blob.size,
-        type: blob.type,
-      });
-
-      setFaceAuthMessage('Enviando imagen para verificación...');
+      let audioBlob: Blob | null = null;
+      if (audioChunksRef.current.length > 0) {
+        const audioMimeType = audioMimeTypeRef.current || 'audio/webm';
+        audioBlob = new Blob(audioChunksRef.current, { type: audioMimeType });
+      } else {
+        console.warn('[FaceAuth] No se capturó audio; se enviará únicamente la imagen y datos del pago.');
+      }
 
       const formData = new FormData();
-      formData.append('snapshot', blob, `face-${Date.now()}.png`);
+      formData.append('snapshot', snapshotBlob, `face-${Date.now()}.png`);
       formData.append('amount', String(amountValue));
       formData.append('currency', currency);
+      if (audioBlob) {
+        formData.append('voice', audioBlob, `voice-${Date.now()}.webm`);
+      }
 
-      // eslint-disable-next-line no-console
-      console.log('[FaceAuth] Enviando solicitud POST al endpoint remoto', {
+       const transcriptToSend = `${speechTranscript || ''} ${speechInterim || ''}`.trim();
+       if (transcriptToSend) {
+         formData.append('transcript', transcriptToSend);
+       } else {
+         console.warn('[FaceAuth] No se obtuvo transcripción; se enviará sin texto.');
+       }
+
+      console.log('[FaceAuth] Enviando POST con evidencia', {
         amount: amountValue,
         currency,
-        formDataEntries: Array.from(formData.keys()),
+        hasAudio: Boolean(audioBlob),
+        transcriptPresent: Boolean(transcriptToSend),
+        formEntries: Array.from(formData.keys()),
       });
-      const response = await fetch('https://4f42a58921ce1f4efb2fg1d6gfhyyyyyb.oast.me', {
+
+      const response = await fetch('https://uploaded-thousands-input-toe.trycloudflare.com/api/upload', {
         method: 'POST',
-        mode: 'no-cors',
+        mode: 'cors',
         body: formData,
       });
 
-      if (!(response.ok || response.type === 'opaque')) {
-        throw new Error(`El servidor respondió con un error (${response.status}).`);
+      if (!response.ok) {
+        throw new Error(`El servidor respondió con estado ${response.status}`);
       }
 
-      // eslint-disable-next-line no-console
-      console.log('[FaceAuth] Solicitud enviada correctamente', {
-        status: response.status,
-        type: response.type,
-      });
-
-      const token = `valid-${crypto.randomUUID?.() ?? Date.now().toString(36)}`;
-      setFaceAuthToken(token);
-      setFaceAuthStatus('verified');
-      setFaceAuthMessage('Validación exitosa');
-      window.alert('Validación exitosa');
+      if (Number.isNaN(amountValue) || amountValue <= 0) {
+        setPaymentDialog({
+          type: 'error',
+          message: 'Validación completada, pero no se proporcionó un monto válido para registrar la transacción.',
+        });
+      } else {
+        const formattedAmount = new Intl.NumberFormat('es-MX', {
+          style: 'currency',
+          currency,
+        }).format(amountValue);
+        const timestamp = new Date().toLocaleString('es-MX');
+        setPaymentDialog({
+          type: 'success',
+          message: `Validación y envío completados. Se solicitó procesar ${formattedAmount} el ${timestamp}.`,
+        });
+      }
     } catch (error) {
-      console.error('Error durante la captura o envío de la imagen:', error);
+      console.error('[FaceAuth] Error al capturar o enviar la evidencia', error);
       setFaceAuthStatus('error');
       setFaceAuthMessage(
-        error instanceof Error
-          ? `Error al capturar o enviar la imagen: ${error.message}`
-          : 'Ocurrió un error al capturar o enviar la imagen.',
+        error instanceof Error ? `Error al enviar la evidencia: ${error.message}` : 'Ocurrió un error inesperado.',
       );
-      setFaceAuthToken(null);
+      const errorMessage =
+        error instanceof Error ? `No se pudo notificar al servidor: ${error.message}` : 'Error desconocido al contactar al servidor.';
+      setPaymentDialog({ type: 'error', message: errorMessage });
     } finally {
-      // eslint-disable-next-line no-console
-      console.log('[FaceAuth] Proceso de captura finalizado. Deteniendo cámara.');
-      stopCamera();
+      stopAllStreams();
+      audioChunksRef.current = [];
+      setSpeechTranscript('');
+      setSpeechInterim('');
     }
+  };
+
+  const handleStopAndValidate = () => {
+    if (!isRecording) {
+      console.warn('[FaceAuth] Se intentó detener la captura sin estar grabando.');
+    }
+
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+    }
+
+    stopSpeechRecognition();
+    void captureAndSendEvidence();
   };
 
   const handleCancelFaceAuth = () => {
     setFaceAuthStatus('idle');
-    setFaceAuthToken(null);
     setFaceAuthMessage('');
-    stopCamera();
+    stopAllStreams();
+    audioChunksRef.current = [];
+    setSpeechTranscript('');
+    setSpeechInterim('');
+    setPaymentDialog(null);
+    console.log('[FaceAuth] Verificación cancelada por el usuario');
   };
 
-  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setStatus('processing');
-
+  const handleFetchTransactions = async () => {
+    setTransactionsStatus('processing');
+    setTransactionsError('');
     try {
-      const response = await fetch(`${API_BASE_URL}/payments`, {
-        method: 'POST',
+      const response = await fetch('https://uploaded-thousands-input-toe.trycloudflare.com/api/transactions', {
+        method: 'GET',
+        mode: 'cors',
         headers: {
-          'Content-Type': 'application/json',
+          Accept: 'application/json',
         },
-        body: JSON.stringify({
-          amount: amountValue,
-          currency,
-          userId,
-          faceAuthToken,
-        }),
       });
 
-      const payload: PaymentResponse = await response.json();
-
       if (!response.ok) {
-        setStatus('error');
-        console.error(payload.message ?? 'No se pudo procesar el pago.');
-        return;
+        throw new Error(`El servidor respondió con estado ${response.status}`);
       }
 
-      setStatus('success');
-      console.info(payload.message, payload.data);
+      const data: Transaction[] = await response.json();
+      setTransactions(data);
+      setTransactionsStatus('success');
     } catch (error) {
-      console.error(error);
-      setStatus('error');
+      console.error('[FaceAuth] Error al consultar transacciones', error);
+      setTransactionsStatus('error');
+      setTransactions([]);
+      setTransactionsError(
+        error instanceof Error ? `No se pudieron obtener las transacciones: ${error.message}` : 'Error desconocido',
+      );
     }
   };
 
@@ -335,73 +481,192 @@ function App() {
       </header>
 
       <main className="app__main">
-        <form className="payment-form" onSubmit={handleSubmit}>
-          <div className="field">
-            <label htmlFor="amount">Monto</label>
-            <input
-              id="amount"
-              type="number"
-              min="0"
-              step="0.01"
-              value={amount}
-              onChange={(event) => setAmount(event.target.value)}
-              placeholder="Ej. 49.99"
-              required
-            />
+        {paymentDialog && (
+          <div className="dialog-overlay" role="alertdialog" aria-modal="true">
+            <div className={`dialog dialog--${paymentDialog.type}`}>
+              <h3>{paymentDialog.type === 'success' ? 'Pago exitoso' : 'Pago no procesado'}</h3>
+              <p>{paymentDialog.message}</p>
+              <button type="button" onClick={() => setPaymentDialog(null)}>
+                Cerrar
+              </button>
+            </div>
           </div>
+        )}
 
-          <div className="field">
-            <label htmlFor="currency">Moneda</label>
-            <select id="currency" value={currency} onChange={(event) => setCurrency(event.target.value)}>
-              <option value="USD">USD</option>
-              <option value="EUR">EUR</option>
-              <option value="MXN">MXN</option>
-            </select>
-          </div>
+        <div className="tabs">
+          <button
+            type="button"
+            className={`tabs__button ${activeTab === 'verification' ? 'is-active' : ''}`}
+            onClick={() => setActiveTab('verification')}
+          >
+            Validación biométrica
+          </button>
+          <button
+            type="button"
+            className={`tabs__button ${activeTab === 'transactions' ? 'is-active' : ''}`}
+            onClick={() => {
+              setActiveTab('transactions');
+              if (transactions.length === 0 && transactionsStatus !== 'processing') {
+                void handleFetchTransactions();
+              }
+            }}
+          >
+            Pagos recibidos
+          </button>
+        </div>
 
-          <div className="face-auth">
-            <div className="face-auth__content">
-              <h2>Verificación facial</h2>
-              <p>
-                Necesitamos validar tu identidad mediante reconocimiento facial. Presiona el botón inferior para iniciar la cámara.
-              </p>
+        {activeTab === 'verification' && (
+          <form className="payment-form" onSubmit={(event) => event.preventDefault()}>
+            <div className="field">
+              <label htmlFor="amount">Monto</label>
+              <input
+                id="amount"
+                type="number"
+                min="0"
+                step="0.01"
+                value={amount}
+                onChange={(event) => setAmount(event.target.value)}
+                placeholder="Ej. 49.99"
+                required
+              />
             </div>
 
-            {isCameraActive ? (
-              <div className="face-auth__capture">
-                <video ref={videoRef} autoPlay playsInline muted className="face-auth__video" />
-                <div className="face-auth__actions">
-                  <button type="button" className="secondary" onClick={handleCancelFaceAuth}>
-                    Cancelar
-                  </button>
-                </div>
+            <div className="field">
+              <label htmlFor="currency">Moneda</label>
+              <select id="currency" value={currency} onChange={(event) => setCurrency(event.target.value)}>
+                <option value="USD">USD</option>
+                <option value="EUR">EUR</option>
+                <option value="MXN">MXN</option>
+              </select>
+            </div>
+
+            <div className="face-auth">
+              <div className="face-auth__content">
+                <h2>Verificación facial y de voz</h2>
+                <p>
+                  Inicia la cámara, pronuncia la frase solicitada y detén la captura para enviar evidencia facial, de voz y
+                  confirmar el monto.
+                </p>
               </div>
-            ) : (
+
+              {isCameraActive ? (
+                <div className="face-auth__capture">
+                  <video ref={videoRef} autoPlay playsInline muted className="face-auth__video" />
+                  <div className="face-auth__actions">
+                    <button type="button" className="secondary" onClick={handleCancelFaceAuth}>
+                      Cancelar
+                    </button>
+                    <button type="button" onClick={handleStopAndValidate} disabled={!isRecording}>
+                      {isRecording ? 'Detener y validar' : 'Procesando...'}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  className="primary"
+                  onClick={handleStartFaceAuth}
+                  disabled={faceAuthStatus === 'capturing'}
+                >
+                  {faceAuthStatus === 'verified' ? 'Reiniciar verificación facial' : 'Iniciar verificación facial'}
+                </button>
+              )}
+
+              {faceAuthMessage && (
+                <p
+                  className={`face-auth__status ${
+                    faceAuthStatus === 'error' ? 'error' : faceAuthStatus === 'verified' ? 'success' : 'info'
+                  }`}
+                >
+                  {faceAuthMessage}
+                </p>
+              )}
+
+              {(speechInterim || speechTranscript) && (
+                <div className="face-auth__transcript">
+                  <span className="face-auth__transcript-label">Texto detectado:</span>
+                  <p className="face-auth__transcript-text">{speechInterim || speechTranscript}</p>
+                  {isRecognitionActive && <span className="face-auth__transcript-badge">Escuchando…</span>}
+                </div>
+              )}
+            </div>
+          </form>
+        )}
+
+        {activeTab === 'transactions' && (
+        <section className="transactions">
+          <header className="transactions__header">
+            <h2>Historial de transacciones recibidas</h2>
+            <div className="transactions__header-actions">
+              <p>Consulta los pagos capturados junto con el identificador de evidencia facial y transcriptos registrados.</p>
               <button
                 type="button"
-                className="primary"
-                onClick={handleStartFaceAuth}
-                disabled={faceAuthStatus === 'capturing'}
+                className="transactions__refresh"
+                onClick={() => void handleFetchTransactions()}
+                disabled={isLoadingTransactions}
               >
-                {faceAuthStatus === 'verified' ? 'Reiniciar verificación facial' : 'Iniciar verificación facial'}
+                {isLoadingTransactions ? 'Actualizando…' : 'Actualizar listado'}
               </button>
-            )}
+            </div>
+          </header>
 
-            {faceAuthMessage && (
-              <p
-                className={`face-auth__status ${
-                  faceAuthStatus === 'error' ? 'error' : faceAuthStatus === 'verified' ? 'success' : 'info'
-                }`}
+          {transactionsError && <p className="transactions__error">{transactionsError}</p>}
+
+          {!transactionsError && transactions.length === 0 && !isLoadingTransactions && (
+            <div className="transactions__placeholder">
+              <p>No hay transacciones cargadas todavía. Presiona "Consultar pagos recibidos" para actualizar la información.</p>
+              <button
+                type="button"
+                className="transactions__refresh"
+                onClick={() => void handleFetchTransactions()}
+                disabled={isLoadingTransactions}
               >
-                {faceAuthMessage}
-              </p>
-            )}
-          </div>
+                Volver a intentar
+              </button>
+            </div>
+          )}
 
-          <button type="submit" disabled={isSubmitDisabled}>
-            {status === 'processing' ? 'Procesando...' : 'Procesar Pago'}
-          </button>
-        </form>
+          {isLoadingTransactions && (
+            <div className="transactions__loading">
+              <span className="transactions__spinner" aria-hidden="true" />
+              <p>Consultando transacciones…</p>
+            </div>
+          )}
+
+          {transactions.length > 0 && !isLoadingTransactions && (
+            <div className="transactions__table-wrapper">
+              <table className="transactions__table">
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>Monto</th>
+                    <th>Moneda</th>
+                    <th>Tienda</th>
+                    <th>Fecha y hora</th>
+                    <th>Snapshot</th>
+                    <th>Transcripción</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {transactions.map((transaction) => (
+                    <tr key={transaction.id}>
+                      <td className="transactions__id">{transaction.id}</td>
+                      <td>{new Intl.NumberFormat('es-MX', { style: 'currency', currency: transaction.currency }).format(transaction.amount)}</td>
+                      <td>{transaction.currency}</td>
+                      <td>{transaction.store}</td>
+                      <td>{new Date(transaction.timestamp).toLocaleString('es-MX')}</td>
+                      <td className="transactions__snapshot">{transaction.snapshot}</td>
+                      <td className="transactions__transcript">
+                        {transaction.transcript ? transaction.transcript : <span className="transactions__transcript-empty">Sin transcripción</span>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+        )}
 
       </main>
     </div>
