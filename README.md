@@ -1,10 +1,14 @@
-Aplicación Full-Stack de Pagos con Validación Biométrica
+# Aplicación Full-Stack de Pagos con Validación Biométrica
 
-Propósito General
+# Propósito General
+
+Históricamente, los procesos de pago han dependido de artefactos externos, desde el efectivo y las tarjetas hasta los teléfonos inteligentes. El objetivo fundamental de este proyecto es eliminar esa fricción, liberando al usuario de la necesidad de cualquier dispositivo. Nuestra visión es convertir a la persona en su propio medio de pago, donde su identidad biométrica (su rostro y su voz) es la única llave necesaria para autorizar una transacción.
+
+El impacto de esta tecnología transforma la conveniencia diaria, permitiendo salir a correr sin cartera o eliminando el riesgo de clonación de tarjetas, pero su valor más profundo radica en la accesibilidad. Este proyecto busca dar acceso a pagos rápidos y dignos a personas con discapacidades motrices, quienes no pueden manipular una tarjeta o un teléfono fácilmente. Al convertir el rostro y la voz en el método de pago, simplificamos la transacción a un gesto natural, haciéndola más segura, inclusiva y humana.
 
 Esta es una aplicación full-stack de demostración que ilustra un flujo completo para la creación de pagos seguros. El proceso captura un monto desde una interfaz web, autoriza la transacción mediante validación biométrica (reconocimiento facial y de voz) y procesa el pago final a través del servicio de OpenPayments.
 
-Flujo de Funcionamiento
+# Flujo de Funcionamiento
 
 El proyecto se divide en dos componentes principales: la interfaz de usuario (frontend) y el servidor (backend).
 
@@ -60,8 +64,10 @@ Instrucciones de Ejecución
 
 Para ejecutar la aplicación en un entorno de desarrollo, sigue estos pasos:
 
-# 1. Instalar todas las dependencias del proyecto
+1. Instalar todas las dependencias del proyecto
+
 npm install
 
-# 2. Iniciar el servidor de desarrollo
+2. Iniciar el servidor de desarrollo
+
 npm run dev
