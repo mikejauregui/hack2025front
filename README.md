@@ -76,7 +76,8 @@ npm install
 
 npm run dev
 
-
+# One Pager
+https://docs.google.com/document/d/1S2hedoYSg_eU0Mr8ETCOuv1DbL44KDl4SGwY3fXBGQk/edit?tab=t.0
 
 # Español
 # Aplicación Full-Stack de Pagos con Validación Biométrica
@@ -156,3 +157,6 @@ npm install
 2. Iniciar el servidor de desarrollo
 
 npm run dev
+
+# One Pager
+https://docs.google.com/document/d/1S2hedoYSg_eU0Mr8ETCOuv1DbL44KDl4SGwY3fXBGQk/edit?tab=t.0
